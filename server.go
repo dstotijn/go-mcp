@@ -549,6 +549,9 @@ func (s *Server) handlePingRequest(_ context.Context) (*struct{}, error) {
 }
 
 func decodeParams[T any](data []byte) (v T, err error) {
+	if len(data) == 0 {
+		return v, nil
+	}
 	if err = json.Unmarshal(data, &v); err != nil {
 		return v, jsonrpc.ErrInvalidParams.WithData(map[string]string{
 			"detail": err.Error(),
