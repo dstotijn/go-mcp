@@ -3,7 +3,7 @@ module github.com/dstotijn/go-mcp
 go 1.24.0
 
 require (
-	github.com/dstotijn/valtor v0.1.2
+	github.com/dstotijn/valtor v0.2.0
 	github.com/invopop/jsonschema v0.13.0
 )
 

@@ -125,7 +125,7 @@ type Error struct {
 
 // Error implements the error interface.
 func (e Error) Error() string {
-	return fmt.Sprintf("jsonrpc error: code=%d message=%s detail=%v", e.Code, e.Message, e.Data)
+	return fmt.Sprintf("jsonrpc error: code=%d message=%s data=%v", e.Code, e.Message, e.Data)
 }
 
 func (e Error) WithData(data any) *Error {
@@ -439,23 +439,24 @@ func (c *Conn) Call(ctx context.Context, method string, params any) (json.RawMes
 	c.pending[req.ID.String()] = respChan
 	c.pendingMu.Unlock()
 
+	// Ensure cleanup of pending request in all cases.
+	defer func() {
+		c.pendingMu.Lock()
+		delete(c.pending, req.ID.String())
+		c.pendingMu.Unlock()
+	}()
+
 	// Send the request
 	c.writeMu.Lock()
 	err := c.enc.Encode(req)
 	c.writeMu.Unlock()
 	if err != nil {
-		c.pendingMu.Lock()
-		delete(c.pending, req.ID.String())
-		c.pendingMu.Unlock()
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 
 	// Wait for the response or context cancellation.
 	select {
 	case <-ctx.Done():
-		c.pendingMu.Lock()
-		delete(c.pending, req.ID.String())
-		c.pendingMu.Unlock()
 		return nil, ctx.Err()
 	case resp := <-respChan:
 		if resp.Error != nil {

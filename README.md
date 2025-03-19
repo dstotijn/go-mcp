@@ -14,9 +14,10 @@ Protocol](https://modelcontextprotocol.io/) (MCP).
 ## Features
 
 - [x] Supports protocol revision [2024-11-05](https://spec.modelcontextprotocol.io/specification/2024-11-05/)
+- [x] Server support
+- [x] Client support
 - [x] Type safe RPC handlers without reflection
 - [x] Built-in validation of tool arguments
-- [ ] Client support
 
 ## Installation
 

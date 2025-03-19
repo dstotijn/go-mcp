@@ -15,8 +15,10 @@
 package mcp
 
 import (
+	"context"
 	"io"
 	"os"
+	"os/exec"
 )
 
 const StdioSessionID = "stdio"
@@ -72,4 +74,24 @@ func localPipe() (c1, c2 localConn) {
 	c2 = localConn{send: b, recv: a}
 
 	return c1, c2
+}
+
+// cmdReadWriter implements [io.ReadWriteCloser] for a command's stdin/stdout.
+type cmdReadWriter struct {
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout io.ReadCloser
+	ctx    context.Context
+}
+
+func (rwc *cmdReadWriter) Read(p []byte) (n int, err error) {
+	return rwc.stdout.Read(p)
+}
+
+func (rwc *cmdReadWriter) Write(p []byte) (n int, err error) {
+	return rwc.stdin.Write(p)
+}
+
+func (rwc *cmdReadWriter) Close() error {
+	return rwc.cmd.Process.Kill()
 }

@@ -70,7 +70,7 @@ func (s *Session) ListRoots(ctx context.Context, params *ListRootsParams) (*List
 }
 
 // CreateSamplingMessage calls an MCP client to create a message.
-func (s *Session) CreateSamplingMessage(ctx context.Context, params *CreateMessageParams) (*CreateMessageResult, error) {
+func (s *Session) CreateSamplingMessage(ctx context.Context, params *CreateSamplingMessageParams) (*CreateSamplingMessageResult, error) {
 	if s.clientCapabilities.Sampling == nil {
 		return nil, ErrSamplingNotSupported
 	}
@@ -80,7 +80,7 @@ func (s *Session) CreateSamplingMessage(ctx context.Context, params *CreateMessa
 		return nil, fmt.Errorf("mcp: failed to call create message: %w", err)
 	}
 
-	result := &CreateMessageResult{}
+	result := &CreateSamplingMessageResult{}
 	if err := json.Unmarshal(resp, result); err != nil {
 		return nil, fmt.Errorf("mcp: failed to unmarshal create message result: %w", err)
 	}

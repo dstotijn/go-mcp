@@ -4,8 +4,8 @@ github.com/buger/jsonparser v1.1.1 h1:2PnMjfWD7wBILjqQbt530v576A/cAbQvEW9gGIpYMU
 github.com/buger/jsonparser v1.1.1/go.mod h1:6RYKKt7H4d4+iWqouImQ9R2FZql3VbhNgx27UK13J/0=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/dstotijn/valtor v0.1.2 h1:oTPjPcqciVjCqo80ZkUBsAtHb/fwJNb/CPTCsyrC7Bo=
-github.com/dstotijn/valtor v0.1.2/go.mod h1:ucFCCz24dTX2HXVZ5mRqTsDIY/I8L4fEu/04vn1z3IY=
+github.com/dstotijn/valtor v0.2.0 h1:OdBYYbODc3gkNC9KpXgAfNLx5TrOMw9Z+M1kHa1EUVc=
+github.com/dstotijn/valtor v0.2.0/go.mod h1:ucFCCz24dTX2HXVZ5mRqTsDIY/I8L4fEu/04vn1z3IY=
 github.com/invopop/jsonschema v0.13.0 h1:KvpoAJWEjR3uD9Kbm2HWJmqsEaHt8lBUpd0qHcIi21E=
 github.com/invopop/jsonschema v0.13.0/go.mod h1:ffZ5Km5SWWRAIN6wbDXItl95euhFz2uON45H2qjYt+0=
 github.com/josharian/intern v1.0.0/go.mod h1:5DoeVV0s6jJacbCEi61lwdGj/aVlrQvzHFFd8Hwg//Y=

@@ -250,8 +250,8 @@ type CompletionResult struct {
 	Values  []string `json:"values"`
 }
 
-// CreateMessageResult represents the client's response to a sampling request.
-type CreateMessageResult struct {
+// CreateSamplingMessageResult represents the client's response to a sampling request.
+type CreateSamplingMessageResult struct {
 	Role       Role    `json:"role"`
 	Content    Content `json:"content"`
 	Model      string  `json:"model"`
@@ -460,8 +460,8 @@ const (
 	IncludeContextThisServer IncludeContext = "thisServer"
 )
 
-// CreateMessageParams represents parameters for a create message request.
-type CreateMessageParams struct {
+// CreateSamplingMessageParams represents parameters for a create sampling message request.
+type CreateSamplingMessageParams struct {
 	MaxTokens        int               `json:"maxTokens"`
 	Messages         []SamplingMessage `json:"messages"`
 	IncludeContext   IncludeContext    `json:"includeContext,omitempty"`

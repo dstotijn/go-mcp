@@ -257,7 +257,7 @@ func handleRootsListChanged(ctx context.Context, session mcp.Session) {
 func handleClientInitialized(ctx context.Context, conn mcp.Session) {
 	time.Sleep(1 * time.Second)
 	go func() {
-		result, err := conn.CreateSamplingMessage(context.Background(), &mcp.CreateMessageParams{
+		result, err := conn.CreateSamplingMessage(context.Background(), &mcp.CreateSamplingMessageParams{
 			Messages: []mcp.SamplingMessage{
 				{
 					Role:    mcp.RoleUser,
