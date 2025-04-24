@@ -1,0 +1,132 @@
+---
+description: Go Testing Best Practices
+globs: *_test.go
+---
+## Description
+This rule ensures that Go tests follow best practices for effective, maintainable, and idiomatic testing in Go projects.
+
+## Rule
+When writing tests in Go:
+
+### Test Organization
+1. Use table-driven tests for testing multiple scenarios
+2. Name test functions as `Test<FunctionName>` or `Test<FunctionName>_<Scenario>`
+3. Use subtests with `t.Run()` to organize related test cases
+4. Group tests logically by functionality
+5. Keep test files in the same package as the code they test
+
+### Test Structure
+1. Follow the Arrange-Act-Assert (AAA) pattern:
+   - Arrange: Set up test data and preconditions
+   - Act: Call the function/method being tested
+   - Assert: Verify the results
+2. Use clear separation between these sections
+3. Minimize test setup code; use helper functions for common setup
+4. Make test failures descriptive and actionable
+
+### Assertions
+1. Use `t.Errorf()` or `t.Fatalf()` with descriptive messages
+2. Include expected vs. actual values in failure messages
+3. Avoid `testify` or similar packages, but do use `go-cmp`.
+4. Prefer `t.Fatalf()` only when continuing the test is impossible
+
+### Mocking and Test Doubles
+1. Use interfaces to enable mocking of dependencies
+2. Create simple, focused test doubles (mocks, stubs, fakes)
+3. Consider using the standard library's `httptest` for HTTP testing
+4. Avoid `sqlmock` or similar tools for database testing, stick to the stdlib
+
+### Test Coverage
+1. High test coverage is not a goal in and of itself, focus on critical code paths
+2. Test edge cases and error conditions
+3. Use `go test -cover` to measure coverage
+4. Use `go test -race` to detect race conditions
+
+## Implementation
+- The Cursor IDE will enforce this rule by:
+  - Suggesting test improvements
+  - Highlighting testing anti-patterns
+  - Providing templates for common testing patterns
+
+## Benefits
+- More reliable and maintainable tests
+- Better test coverage
+- Faster test execution
+- Clearer test failures
+- Consistent testing approach across the project
+
+## Examples
+
+### ✅ Correct Table-Driven Test:
+
+```go
+func TestCalculate(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    int
+		expected int
+		wantErr  bool
+	}{
+		{
+			name:     "positive number",
+			input:    5,
+			expected: 10,
+			wantErr:  false,
+		},
+		{
+			name:     "zero",
+			input:    0,
+			expected: 0,
+			wantErr:  false,
+		},
+		{
+			name:     "negative number",
+			input:    -5,
+			expected: 0,
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange is done in the table
+
+			// Act
+			result, err := Calculate(tt.input)
+
+			// Assert
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("Calculate(%d) expected error but got none", tt.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("Calculate(%d) unexpected error: %v", tt.input, err)
+			}
+			if result != tt.expected {
+				t.Errorf("Calculate(%d) = %d, want %d", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+```
+
+### ❌ Incorrect Test:
+
+```go
+func TestCalculate(t *testing.T) {
+	// No clear structure, no descriptive test names
+	result, _ := Calculate(5)
+	if result != 10 {
+		t.Error("failed")
+	}
+	
+	result, _ = Calculate(0)
+	if result != 0 {
+		t.Error("failed")
+	}
+	
+	// Error case not tested
+}
+``` 

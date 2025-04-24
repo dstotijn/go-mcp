@@ -1,0 +1,107 @@
+---
+description: Idiomatic Go Code Rules
+globs: *.go
+---
+## Description
+This rule ensures that all Go code follows idiomatic Go practices, adhering to the official Go style guide and common best practices in the Go community.
+
+## Rule
+When writing Go code:
+
+### Naming Conventions
+1. Use `camelCase` for variable and function names (not `snake_case`)
+2. Use `PascalCase` for exported names (public functions, types, variables, constants)
+3. Use `camelCase` for unexported names (private functions, types, variables, constants)
+4. Use acronyms in all caps (e.g., `HTTP`, `URL`, `ID`) when they appear at the beginning of a name, otherwise all lowercase
+5. Keep names short and descriptive; the larger the scope, the more descriptive the name should be
+
+### Code Organization
+1. Group related declarations (imports, constants, types, variables, functions)
+2. Order imports in groups: standard library, third-party packages, local packages
+3. Use blank lines to separate logical sections of code
+4. Keep functions small and focused on a single responsibility
+5. Place methods on receiver types in a logical order, with the most important methods first
+
+### Error Handling
+1. Always check errors and handle them appropriately
+2. Use the `errors` package for simple errors and `fmt.Errorf` with `%w` for wrapping errors
+3. Return errors rather than using panic (except for truly unrecoverable situations)
+4. Use meaningful error messages that help diagnose the problem
+
+### Comments and Documentation
+1. Write comments as complete sentences with proper punctuation (ending with a period)
+2. Use godoc-style comments for exported functions, types, and variables
+3. Focus on explaining "why" rather than "what" in comments
+4. Document non-obvious behavior and edge cases
+
+### Code Style
+1. Use gofmt/goimports to format code
+2. Avoid unnecessary else blocks after return statements
+3. Prefer early returns to reduce nesting
+4. Use named return values only when they improve readability
+5. Limit line length to 100-120 characters
+6. Use blank interfaces (`any`) sparingly
+7. Use `any` instead of `interface{}`
+
+### Concurrency
+1. Use goroutines and channels appropriately
+2. Always ensure goroutines can exit properly (avoid leaks)
+3. Use context for cancellation and timeouts
+4. Use sync primitives (Mutex, RWMutex, WaitGroup) correctly
+5. Be careful with shared memory; prefer message passing when appropriate
+
+### Testing
+1. Write table-driven tests when testing multiple cases
+2. Use meaningful test names that describe what is being tested
+3. Structure tests as "Arrange-Act-Assert"
+4. Use subtests for organizing related test cases
+5. Avoid global state in tests
+
+## Implementation
+- The Cursor IDE will enforce this rule by:
+  - Providing suggestions for idiomatic Go code
+  - Highlighting non-idiomatic patterns
+  - Offering refactoring options to improve code quality
+
+## Benefits
+- Consistent, readable code across the project
+- Easier maintenance and collaboration
+- Better performance and fewer bugs
+- Code that follows community standards and best practices
+
+## Examples
+
+### ✅ Correct:
+
+```go
+// UserService provides user management functionality.
+type UserService struct {
+	repo Repository
+	log  Logger
+}
+
+// FindByID returns a user by their ID or an error if not found.
+func (s *UserService) FindByID(ctx context.Context, id string) (*User, error) {
+	user, err := s.repo.GetUser(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("finding user %s: %w", id, err)
+	}
+	return user, nil
+}
+```
+
+### ❌ Incorrect:
+
+```go
+// bad naming, poor error handling, inconsistent formatting
+type user_service struct {
+	Repo Repository
+	Log Logger
+}
+
+func (s *user_service) find_by_id(ctx context.Context, id string) (*User, error) {
+	user, err := s.Repo.GetUser(ctx, id)
+	if err != nil { return nil, err }
+	return user, nil
+}
+``` 
