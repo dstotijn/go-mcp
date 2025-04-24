@@ -26,8 +26,10 @@ import (
 type Role string
 
 const (
+	// RoleAssistant represents the AI assistant in a conversation.
 	RoleAssistant Role = "assistant"
-	RoleUser      Role = "user"
+	// RoleUser represents the human user in a conversation.
+	RoleUser Role = "user"
 )
 
 // Implementation describes the name and version of an MCP implementation.
@@ -518,12 +520,14 @@ type RootsListChangedNotificationParams struct {
 	Meta map[string]any `json:"_meta,omitempty"`
 }
 
+// ToolDef represents a tool definition, used for registering tools with the server.
 type ToolDef[P any] struct {
 	Name        string
 	Description string
 	HandleFunc  ToolHandleFunc[P]
 }
 
+// ToolHandleFunc is a function that handles a tool call with type-safe parameters.
 type ToolHandleFunc[P any] func(ctx context.Context, params P) *CallToolResult
 
 type ToolCall struct {
@@ -531,4 +535,5 @@ type ToolCall struct {
 	Arguments json.RawMessage `json:"arguments,omitempty"`
 }
 
+// EmptyResult represents a result with no content.
 type EmptyResult struct{}

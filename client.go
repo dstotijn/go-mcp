@@ -25,8 +25,10 @@ import (
 	"github.com/dstotijn/go-mcp/internal/jsonrpc"
 )
 
+// ErrTransportNotSet is returned when a client operation is attempted without configuring a transport.
 var ErrTransportNotSet = errors.New("transport not set")
 
+// Client represents an MCP client.
 type Client struct {
 	session                        *Session
 	rwc                            io.ReadWriteCloser
@@ -34,17 +36,21 @@ type Client struct {
 	onCreateSamplingMessageRequest func(ctx context.Context, params CreateSamplingMessageParams) (*CreateSamplingMessageResult, error)
 }
 
+// ClientConfig contains configuration options for creating a new MCP client.
 type ClientConfig struct {
 	OnCreateSamplingMessageRequest func(ctx context.Context, params CreateSamplingMessageParams) (*CreateSamplingMessageResult, error)
 }
 
+// ClientOption represents a function that modifies a Client.
 type ClientOption func(*Client)
 
+// StdioClientTransportConfig contains configuration for a stdio-based client transport.
 type StdioClientTransportConfig struct {
 	Command string
 	Args    []string
 }
 
+// NewClient creates a new MCP client with the provided configuration and options.
 func NewClient(cfg ClientConfig, opts ...ClientOption) *Client {
 	c := &Client{
 		onCreateSamplingMessageRequest: cfg.OnCreateSamplingMessageRequest,
@@ -57,6 +63,7 @@ func NewClient(cfg ClientConfig, opts ...ClientOption) *Client {
 	return c
 }
 
+// WithStdioClientTransport returns a ClientOption that configures a stdio-based transport.
 func WithStdioClientTransport(config StdioClientTransportConfig) ClientOption {
 	return func(c *Client) {
 		c.connectFn = func(ctx context.Context, c *Client) error {
@@ -88,6 +95,8 @@ func WithStdioClientTransport(config StdioClientTransportConfig) ClientOption {
 	}
 }
 
+// Connect establishes a connection to the MCP server using the transport that
+// was configured when creating the client.
 func (c *Client) Connect(ctx context.Context) error {
 	if c.connectFn == nil {
 		return ErrTransportNotSet
@@ -107,6 +116,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	return nil
 }
 
+// Disconnect closes the connection to the MCP server.
 func (c *Client) Disconnect() error {
 	if c.rwc == nil {
 		return ErrTransportNotSet
@@ -124,6 +134,7 @@ func (c *Client) Call(ctx context.Context, method string, params any) (json.RawM
 	return c.session.conn.Call(ctx, method, params)
 }
 
+// Handle implements [jsonrpc.Handler].
 func (c *Client) Handle(ctx context.Context, req *jsonrpc.Request) (any, error) {
 	switch req.Method {
 	case "sampling/createMessage":

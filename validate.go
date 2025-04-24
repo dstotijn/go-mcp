@@ -34,10 +34,12 @@ var implValSchema = valtor.Object[Implementation]().Map(valtor.FieldValidatorMap
 	},
 })
 
+// Validate checks if the InitializeParams object is valid according to the related schema.
 func (ip InitializeParams) Validate() error {
 	return initializeParamsValSchema.Validate(ip)
 }
 
+// Validate checks if the Implementation object is valid according to the related schema.
 func (i Implementation) Validate() error {
 	return implValSchema.Validate(i)
 }
@@ -54,6 +56,7 @@ var toolValSchema = valtor.Object[Tool]().Map(valtor.FieldValidatorMap[Tool]{
 	},
 })
 
+// Validate checks if the Tool object is valid according to the related schema.
 func (t Tool) Validate() error {
 	return toolValSchema.Validate(t)
 }

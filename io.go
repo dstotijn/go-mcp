@@ -21,6 +21,7 @@ import (
 	"os/exec"
 )
 
+// StdioSessionID is the predefined session ID used for stdio-based connections.
 const StdioSessionID = "stdio"
 
 var stdioRW = &stdioReadWriter{}

@@ -171,6 +171,8 @@ func (f HandlerFunc) Handle(ctx context.Context, req *Request) (any, error) {
 }
 
 // Conn represents a JSON-RPC 2.0 connection.
+//
+// It's used to send and receive JSON-RPC 2.0 requests. Connections are transport agnostic.
 type Conn struct {
 	// ReadWriter is used to read and write JSON-RPC 2.0 messages.
 	rw io.ReadWriter

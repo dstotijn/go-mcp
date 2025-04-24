@@ -31,6 +31,7 @@ import (
 	"github.com/invopop/jsonschema"
 )
 
+// ProtocolVersion defines the protocol version this implementation supports.
 const ProtocolVersion = "2024-11-05"
 
 var jsonschemaReflector = jsonschema.Reflector{
@@ -96,6 +97,7 @@ func NewServer(cfg ServerConfig, opts ...ServerOption) *Server {
 	return s
 }
 
+// WithStdioTransport returns a ServerOption that configures the server to use stdin/stdout for transport.
 func WithStdioTransport() ServerOption {
 	return func(s *Server) {
 		session := &Session{
@@ -110,6 +112,7 @@ func WithStdioTransport() ServerOption {
 	}
 }
 
+// WithSSETransport returns a ServerOption that configures the server to use Server-Sent Events (SSE) for transport.
 func WithSSETransport(endpoint url.URL) ServerOption {
 	return func(s *Server) {
 		s.sseEndpoint = &endpoint
@@ -148,14 +151,17 @@ func (s *Server) UnregisterTools(names ...string) {
 	}
 }
 
+// NotifyResourcesListChanged sends a notification to all clients that the resources list has changed.
 func (s *Server) NotifyResourcesListChanged(ctx context.Context) {
 	s.notifyClients(ctx, "notifications/resources/list_changed", nil)
 }
 
+// NotifyPromptsListChanged sends a notification to all clients that the prompts list has changed.
 func (s *Server) NotifyPromptsListChanged(ctx context.Context) {
 	s.notifyClients(ctx, "notifications/prompts/list_changed", nil)
 }
 
+// NotifyToolsListChanged sends a notification to all clients that the tools list has changed.
 func (s *Server) NotifyToolsListChanged(ctx context.Context) {
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
@@ -172,6 +178,7 @@ func (s *Server) NotifyToolsListChanged(ctx context.Context) {
 	}
 }
 
+// ServeHTTP implements [http.Handler].
 func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	switch req.Method {
 	case "GET":
@@ -189,6 +196,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }
 
+// HandleSSE handles an incoming HTTP request to initiate a Server-Sent Events (SSE) connection.
 func (s *Server) HandleSSE(w http.ResponseWriter, req *http.Request) {
 	if s.sseEndpoint == nil {
 		http.NotFound(w, req)
@@ -573,6 +581,7 @@ func (s *Server) notifyClients(ctx context.Context, method string, params any) {
 	}
 }
 
+// CreateTool creates a new [Tool] with type-safe parameters from a [ToolDef].
 func CreateTool[P any](toolDef ToolDef[P]) Tool {
 	var p P
 	schema := jsonschemaReflector.Reflect(p)

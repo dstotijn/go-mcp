@@ -25,10 +25,14 @@ import (
 )
 
 var (
+	// ErrSamplingNotSupported is returned when sampling is not supported by the client.
 	ErrSamplingNotSupported = errors.New("sampling not supported")
-	ErrRootsNotSupported    = errors.New("roots not supported")
+	// ErrRootsNotSupported is returned when roots are not supported by the client.
+	ErrRootsNotSupported = errors.New("roots not supported")
 )
 
+// Session represents an identifiable connection between an MCP server and an MCP client.
+// The underlying connection uses JSON-RPC. It's transport agnostic.
 type Session struct {
 	sseWriter          io.Writer
 	conn               *jsonrpc.Conn
@@ -38,14 +42,17 @@ type Session struct {
 	serverCapabilities ServerCapabilities
 }
 
+// ID returns the session identifier.
 func (s *Session) ID() string {
 	return s.sessionID
 }
 
+// ClientCapabilities returns the client capabilities for this session.
 func (s *Session) ClientCapabilities() ClientCapabilities {
 	return s.clientCapabilities
 }
 
+// ServerCapabilities returns the server capabilities for this session.
 func (s *Session) ServerCapabilities() ServerCapabilities {
 	return s.serverCapabilities
 }
@@ -88,6 +95,7 @@ func (s *Session) CreateSamplingMessage(ctx context.Context, params *CreateSampl
 	return result, nil
 }
 
+// NotifyResourceUpdated sends a notification to a client that a resource has been updated.
 func (s *Session) NotifyResourceUpdated(ctx context.Context, params ResourceUpdatedNotificationParams) error {
 	return s.conn.Notify(ctx, "notifications/resources/updated", params)
 }
