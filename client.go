@@ -273,6 +273,16 @@ func (c *Client) GetPrompt(ctx context.Context, params GetPromptParams) (*GetPro
 	return result, nil
 }
 
+// Complete sends a completion request to the server.
+func (c *Client) Complete(ctx context.Context, params CompleteParams) (*CompleteResult, error) {
+	result, err := convertResult[CompleteResult](c.call(ctx, "completion/complete", params))
+	if err != nil {
+		return nil, fmt.Errorf("mcp: failed to complete: %w", err)
+	}
+
+	return result, nil
+}
+
 // Ping sends a ping request to the server.
 func (c *Client) Ping(ctx context.Context) error {
 	_, err := c.call(ctx, "ping", nil)

@@ -59,6 +59,7 @@ type Server struct {
 	listResourceTemplatesFn func(ctx context.Context, params ListResourceTemplatesParams) (*ListResourceTemplatesResult, error)
 	listPromptsFn           func(ctx context.Context, params ListPromptsParams) (*ListPromptsResult, error)
 	getPromptFn             func(ctx context.Context, params GetPromptParams) (*GetPromptResult, error)
+	completeFn              func(ctx context.Context, params CompleteParams) (*CompleteResult, error)
 	onClientInitializedFn   func(ctx context.Context, session Session)
 	onRootsListChangedFn    func(ctx context.Context, session Session)
 	onSubscribeResourceFn   func(ctx context.Context, session Session, params ResourceSubscribeParams) error
@@ -76,6 +77,7 @@ type ServerConfig struct {
 	ListRootsFn             func(ctx context.Context, params ListRootsParams) (*ListRootsResult, error)
 	ListPromptsFn           func(ctx context.Context, params ListPromptsParams) (*ListPromptsResult, error)
 	GetPromptFn             func(ctx context.Context, params GetPromptParams) (*GetPromptResult, error)
+	CompleteFn              func(ctx context.Context, params CompleteParams) (*CompleteResult, error)
 	OnClientInitializedFn   func(ctx context.Context, conn Session)
 	OnRootsListChangedFn    func(ctx context.Context, conn Session)
 	OnSubscribeResourceFn   func(ctx context.Context, session Session, params ResourceSubscribeParams) error
@@ -90,6 +92,7 @@ func NewServer(cfg ServerConfig, opts ...ServerOption) *Server {
 		listResourceTemplatesFn: cfg.ListResourceTemplatesFn,
 		listPromptsFn:           cfg.ListPromptsFn,
 		getPromptFn:             cfg.GetPromptFn,
+		completeFn:              cfg.CompleteFn,
 		onClientInitializedFn:   cfg.OnClientInitializedFn,
 		onRootsListChangedFn:    cfg.OnRootsListChangedFn,
 		onSubscribeResourceFn:   cfg.OnSubscribeResourceFn,
@@ -322,6 +325,8 @@ func (s *Server) Handle(ctx context.Context, req *jsonrpc.Request) (any, error) 
 		return handleCall(ctx, req, s.handleListPromptsRequest)
 	case "prompts/get":
 		return handleCall(ctx, req, s.handleGetPromptRequest)
+	case "completion/complete":
+		return handleCall(ctx, req, s.handleCompleteRequest)
 	case "ping":
 		return s.handlePingRequest(ctx)
 	default:
@@ -419,6 +424,9 @@ func (s *Server) handleInitializeRequest(ctx context.Context, params InitializeP
 		serverCapabilities.Tools = &ToolsCapability{
 			ListChanged: true, // Should be configurable?
 		}
+	}
+	if s.completeFn != nil {
+		serverCapabilities.Completions = &CompletionsCapability{}
 	}
 
 	session.serverCapabilities = serverCapabilities
@@ -557,6 +565,22 @@ func (s *Server) handleGetPromptRequest(ctx context.Context, req GetPromptParams
 	}
 
 	return result, nil
+}
+
+func (s *Server) handleCompleteRequest(ctx context.Context, params CompleteParams) (*CompleteResult, error) {
+	if s.completeFn == nil {
+		return nil, jsonrpc.ErrFeatureNotSupported.WithData(map[string]string{
+			"feature": "completion/complete",
+		})
+	}
+
+	if err := params.Validate(); err != nil {
+		return nil, jsonrpc.ErrInvalidParams.WithData(map[string]any{
+			"detail": err.Error(),
+		})
+	}
+
+	return s.completeFn(ctx, params)
 }
 
 func (s *Server) handlePingRequest(_ context.Context) (*struct{}, error) {

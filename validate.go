@@ -66,3 +66,24 @@ var readResourceParamsValSchema = valtor.Object[ReadResourceParams]().Map(valtor
 		return valtor.String().Required().Validate(i.URI)
 	},
 })
+
+var completeArgumentValSchema = valtor.Object[CompleteArgument]().Map(valtor.FieldValidatorMap[CompleteArgument]{
+	"name": func(i CompleteArgument) error {
+		return valtor.String().Required().Validate(i.Name)
+	},
+})
+
+var completeParamsValSchema = valtor.Object[CompleteParams]().Map(valtor.FieldValidatorMap[CompleteParams]{
+	"argument": func(i CompleteParams) error {
+		return completeArgumentValSchema.Validate(i.Argument)
+	},
+	"ref": func(i CompleteParams) error {
+		// TODO: Implement
+		return nil
+	},
+})
+
+// Validate checks if the CompleteParams object is valid according to the related schema.
+func (cp CompleteParams) Validate() error {
+	return completeParamsValSchema.Validate(cp)
+}

@@ -155,6 +155,21 @@ func main() {
 		}
 	}
 
+	// Get completion suggestions.
+	completion, err := client.Complete(ctx, mcp.CompleteParams{
+		Ref: mcp.ResourceReference{
+			URI: "test://static/resource/{id}",
+		},
+		Argument: mcp.CompleteArgument{
+			Name:  "id",
+			Value: "1",
+		},
+	})
+	if err != nil {
+		log.Printf("Failed to get completion: %v", err)
+	}
+	log.Printf("Completion: %+v", completion)
+
 	// Ping the server.
 	if err := client.Ping(ctx); err != nil {
 		log.Fatalf("Failed to ping server: %v", err)

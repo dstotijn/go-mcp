@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"time"
 
@@ -96,6 +97,7 @@ func main() {
 		GetPromptFn:             handleGetPromptRequest,
 		OnClientInitializedFn:   handleClientInitialized,
 		OnSubscribeResourceFn:   handleSubscribeResource,
+		CompleteFn:              handleCompleteRequest,
 	}, opts...)
 
 	mcpServer.Start(ctx)
@@ -226,6 +228,42 @@ func handleListPromptsRequest(ctx context.Context, req mcp.ListPromptsParams) (*
 					},
 				},
 			},
+		},
+	}, nil
+}
+
+func handleCompleteRequest(ctx context.Context, req mcp.CompleteParams) (*mcp.CompleteResult, error) {
+	_, ok := req.Ref.(mcp.ResourceReference)
+	if !ok || req.Argument.Name != "path" {
+		return &mcp.CompleteResult{
+			Completion: mcp.Completion{
+				Values: []string{},
+			},
+		}, nil
+	}
+
+	path1 := "foo/bar/baz"
+	path2 := "foo/bar/qux"
+
+	if req.Argument.Value == "" {
+		return &mcp.CompleteResult{
+			Completion: mcp.Completion{
+				Values: []string{path1, path2},
+			},
+		}, nil
+	}
+
+	values := []string{}
+	if strings.Contains(path1, strings.ToLower(req.Argument.Value)) {
+		values = append(values, path1)
+	}
+	if strings.Contains(path2, strings.ToLower(req.Argument.Value)) {
+		values = append(values, path2)
+	}
+
+	return &mcp.CompleteResult{
+		Completion: mcp.Completion{
+			Values: values,
 		},
 	}, nil
 }

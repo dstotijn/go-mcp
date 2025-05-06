@@ -17,6 +17,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/dstotijn/go-mcp/internal/jsonrpc"
 	"github.com/invopop/jsonschema"
@@ -30,6 +31,13 @@ const (
 	RoleAssistant Role = "assistant"
 	// RoleUser represents the human user in a conversation.
 	RoleUser Role = "user"
+)
+
+const (
+	// ReferenceTypePrompt represents a reference to a prompt.
+	ReferenceTypePrompt = "ref/prompt"
+	// ReferenceTypeResource represents a reference to a resource.
+	ReferenceTypeResource = "ref/resource"
 )
 
 // Implementation describes the name and version of an MCP implementation.
@@ -50,13 +58,17 @@ type RootsCapability struct {
 	ListChanged bool `json:"listChanged"`
 }
 
+// CompletionsCapability represents capabilities related to completions.
+type CompletionsCapability struct{}
+
 // ServerCapabilities represents the capabilities that a server supports.
 type ServerCapabilities struct {
-	Experimental map[string]any       `json:"experimental,omitempty"`
-	Logging      map[string]any       `json:"logging,omitempty"`
-	Prompts      *PromptsCapability   `json:"prompts,omitempty"`
-	Resources    *ResourcesCapability `json:"resources,omitempty"`
-	Tools        *ToolsCapability     `json:"tools,omitempty"`
+	Experimental map[string]any         `json:"experimental,omitempty"`
+	Logging      map[string]any         `json:"logging,omitempty"`
+	Prompts      *PromptsCapability     `json:"prompts,omitempty"`
+	Resources    *ResourcesCapability   `json:"resources,omitempty"`
+	Tools        *ToolsCapability       `json:"tools,omitempty"`
+	Completions  *CompletionsCapability `json:"completions,omitempty"`
 }
 
 // ModelPreferences represents the server's preferences for model selection.
@@ -241,12 +253,11 @@ type CallToolResult struct {
 
 // CompleteResult represents the server's response to a completion request.
 type CompleteResult struct {
-	Result
-	Completion CompletionResult `json:"completion"`
+	Completion Completion     `json:"completion"`
+	Meta       map[string]any `json:"_meta,omitempty"`
 }
 
-// CompletionResult contains completion values and metadata.
-type CompletionResult struct {
+type Completion struct {
 	HasMore bool     `json:"hasMore,omitempty"`
 	Total   int      `json:"total,omitempty"`
 	Values  []string `json:"values"`
@@ -300,11 +311,6 @@ type PromptArgument struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Required    bool   `json:"required,omitempty"`
-}
-
-// ResourceReference represents a reference to a resource.
-type ResourceReference struct {
-	URI string `json:"uri"`
 }
 
 // ResourceTemplate represents a template description for resources available on the server.
@@ -443,6 +449,51 @@ type CompleteParams struct {
 	Ref      CompleteReference `json:"ref"`
 }
 
+func (cp *CompleteParams) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Argument CompleteArgument `json:"argument"`
+		Ref      json.RawMessage  `json:"ref"`
+	}
+
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	type RawRef struct {
+		Type string `json:"type"`
+	}
+
+	var rawRef RawRef
+	if err := json.Unmarshal(raw.Ref, &rawRef); err != nil {
+		return err
+	}
+
+	params := CompleteParams{
+		Argument: raw.Argument,
+	}
+
+	switch rawRef.Type {
+	case ReferenceTypePrompt:
+		var ref PromptReference
+		if err := json.Unmarshal(raw.Ref, &ref); err != nil {
+			return err
+		}
+		params.Ref = ref
+	case ReferenceTypeResource:
+		var ref ResourceReference
+		if err := json.Unmarshal(raw.Ref, &ref); err != nil {
+			return err
+		}
+		params.Ref = ref
+	default:
+		return fmt.Errorf("unknown complete reference type %q", rawRef.Type)
+	}
+
+	*cp = params
+
+	return nil
+}
+
 // CompleteArgument represents an argument for completion.
 type CompleteArgument struct {
 	Name  string `json:"name"`
@@ -450,8 +501,51 @@ type CompleteArgument struct {
 }
 
 // CompleteReference represents a reference for completion.
-// TODO: Fix
-type CompleteReference struct{}
+type CompleteReference interface {
+	Type() string
+}
+
+// PromptReference represents a reference to a prompt.
+type PromptReference struct {
+	Name string `json:"name"`
+}
+
+// Type implements [CompleteReference].
+func (p PromptReference) Type() string {
+	return ReferenceTypePrompt
+}
+
+func (p PromptReference) MarshalJSON() ([]byte, error) {
+	type alias PromptReference
+	return json.Marshal(struct {
+		Type string `json:"type"`
+		alias
+	}{
+		Type:  ReferenceTypePrompt,
+		alias: alias(p),
+	})
+}
+
+// ResourceReference represents a reference to a resource.
+type ResourceReference struct {
+	URI string `json:"uri"`
+}
+
+// Type implements [CompleteReference].
+func (r ResourceReference) Type() string {
+	return ReferenceTypeResource
+}
+
+func (r ResourceReference) MarshalJSON() ([]byte, error) {
+	type alias ResourceReference
+	return json.Marshal(struct {
+		Type string `json:"type"`
+		alias
+	}{
+		Type:  ReferenceTypeResource,
+		alias: alias(r),
+	})
+}
 
 // IncludeContext represents which servers' context to include in a message.
 type IncludeContext string
