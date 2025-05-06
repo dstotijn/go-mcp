@@ -44,6 +44,8 @@ type ctxKey int
 const sessionKey ctxKey = 0
 
 type Server struct {
+	name        string
+	version     string
 	sseEndpoint *url.URL
 
 	sessions   map[string]*Session
@@ -65,6 +67,9 @@ type Server struct {
 type ServerOption func(*Server)
 
 type ServerConfig struct {
+	Name    string
+	Version string
+
 	ListResourcesFn         func(ctx context.Context, params ListResourcesParams) (*ListResourcesResult, error)
 	ReadResourceFn          func(ctx context.Context, params ReadResourceParams) (*ReadResourceResult, error)
 	ListResourceTemplatesFn func(ctx context.Context, params ListResourceTemplatesParams) (*ListResourceTemplatesResult, error)
@@ -88,6 +93,8 @@ func NewServer(cfg ServerConfig, opts ...ServerOption) *Server {
 		onClientInitializedFn:   cfg.OnClientInitializedFn,
 		onRootsListChangedFn:    cfg.OnRootsListChangedFn,
 		onSubscribeResourceFn:   cfg.OnSubscribeResourceFn,
+		name:                    cfg.Name,
+		version:                 cfg.Version,
 	}
 
 	for _, opt := range opts {
@@ -420,8 +427,8 @@ func (s *Server) handleInitializeRequest(ctx context.Context, params InitializeP
 		ProtocolVersion: ProtocolVersion,
 		Capabilities:    serverCapabilities,
 		ServerInfo: Implementation{
-			Name:    "mcp",
-			Version: "0.0.1",
+			Name:    s.name,
+			Version: s.version,
 		},
 	}
 

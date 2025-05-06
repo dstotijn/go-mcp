@@ -32,6 +32,11 @@ import (
 	"github.com/dstotijn/go-mcp"
 )
 
+const (
+	serverName    = "mcp-weather"
+	serverVersion = "0.1.0"
+)
+
 var (
 	httpAddr string
 	useStdio bool
@@ -81,6 +86,8 @@ func main() {
 	}
 
 	mcpServer := mcp.NewServer(mcp.ServerConfig{
+		Name:                    serverName,
+		Version:                 serverVersion,
 		ListResourcesFn:         handleListResourcesRequest,
 		ReadResourceFn:          handleReadResourceRequest,
 		ListResourceTemplatesFn: handleListResourceTemplatesRequest,
@@ -127,7 +134,7 @@ func main() {
 		}()
 	}
 
-	log.Printf("MCP server started, using transports:%v", transports)
+	log.Printf("MCP server started (%q, %q), using transports: %v", serverName, serverVersion, transports)
 	if useSSE {
 		log.Printf("SSE transport endpoint: %v", sseURL.String())
 	}
