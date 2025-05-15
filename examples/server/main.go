@@ -83,7 +83,7 @@ func main() {
 			Host:   host + ":" + port,
 		}
 
-		opts = append(opts, mcp.WithSSETransport(sseURL))
+		opts = append(opts, mcp.WithStreamableHTTPTransport(sseURL))
 	}
 
 	mcpServer := mcp.NewServer(mcp.ServerConfig{
@@ -290,19 +290,20 @@ func handleGetPromptRequest(ctx context.Context, req mcp.GetPromptParams) (*mcp.
 	return nil, errors.New("prompt not found")
 }
 
-func handleRootsListChanged(ctx context.Context, session mcp.Session) {
+func handleRootsListChanged(ctx context.Context, session *mcp.Session) {
 	log.Printf("Roots list changed. Session ID: %s", session.ID())
-	roots, err := session.ListRoots(ctx, &mcp.ListRootsParams{})
+	roots, err := session.ListRoots(context.Background(), &mcp.ListRootsParams{})
 	if err != nil {
 		log.Printf("Failed to list roots: %v", err)
+		return
 	}
 	log.Printf("Listed roots: %v", roots)
 }
 
-func handleClientInitialized(ctx context.Context, conn mcp.Session) {
-	time.Sleep(1 * time.Second)
+func handleClientInitialized(ctx context.Context, session *mcp.Session) {
 	go func() {
-		result, err := conn.CreateSamplingMessage(context.Background(), &mcp.CreateSamplingMessageParams{
+		time.Sleep(1 * time.Second)
+		result, err := session.CreateSamplingMessage(context.Background(), &mcp.CreateSamplingMessageParams{
 			Messages: []mcp.SamplingMessage{
 				{
 					Role:    mcp.RoleUser,
@@ -312,12 +313,13 @@ func handleClientInitialized(ctx context.Context, conn mcp.Session) {
 		})
 		if err != nil {
 			log.Printf("Failed to create sampling message: %v", err)
+			return
 		}
 		log.Printf("Created sampling message: %v", result)
 	}()
 }
 
-func handleSubscribeResource(ctx context.Context, session mcp.Session, params mcp.ResourceSubscribeParams) error {
+func handleSubscribeResource(ctx context.Context, session *mcp.Session, params mcp.ResourceSubscribeParams) error {
 	log.Printf("Subscribed to resource: %v", params)
 	return nil
 }

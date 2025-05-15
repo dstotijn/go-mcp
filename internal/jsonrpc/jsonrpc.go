@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"io"
 	"sync"
-	"sync/atomic"
 )
 
 const version = "2.0"
@@ -77,6 +76,34 @@ func (id *ID) UnmarshalJSON(data []byte) error {
 	*id = make([]byte, len(data))
 	copy(*id, data)
 	return nil
+}
+
+// Message represents a JSON-RPC 2.0 message object, which can be a request
+// (possibly a notification), or a response.
+type Message struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      ID              `json:"id"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params"`
+	Result  json.RawMessage `json:"result"`
+	Error   *Error          `json:"error"`
+}
+
+func (msg *Message) IsRequest() bool {
+	return msg.Method != ""
+}
+
+func (msg *Message) IsNotification() bool {
+	return msg.IsRequest() && len(msg.ID) == 0
+}
+
+// IsResponse returns true if the message is a response.
+func (msg *Message) IsResponse() bool {
+	if msg.Method != "" {
+		return false
+	}
+	return (len(msg.ID) > 0 && (len(msg.Result) > 0 || msg.Error != nil)) ||
+		len(msg.ID) == 0 && msg.Error != nil
 }
 
 // Request represents a JSON-RPC 2.0 request object.
@@ -162,49 +189,73 @@ type Handler interface {
 	Handle(ctx context.Context, req *Request) (any, error)
 }
 
-// HandlerFunc is a function type that implements the Handler interface.
-type HandlerFunc func(ctx context.Context, req *Request) (any, error)
-
-// Handle calls the handler function.
-func (f HandlerFunc) Handle(ctx context.Context, req *Request) (any, error) {
-	return f(ctx, req)
-}
-
 // Conn represents a JSON-RPC 2.0 connection.
 //
 // It's used to send and receive JSON-RPC 2.0 requests. Connections are transport agnostic.
 type Conn struct {
-	// ReadWriter is used to read and write JSON-RPC 2.0 messages.
-	rw io.ReadWriter
+	// Reader used to read JSON-RPC 2.0 messages.
+	r io.Reader
 
 	// Handler processes incoming requests.
 	h Handler
 
+	// newRequestID should returns a new request ID. It should be unique within the
+	// context of I/O between a single client and a server.
+	newRequestID func() ID
+
+	// onResponse is called when a response has been received.
+	onResponse func(res Response)
+
+	// addPendingRequest is called when a connection has received an incoming
+	// request that's not a notification. It allows an upstream session manager
+	// to orchestrate responses (e.g. respond on a different connection).
+	// The cancelFn function should be called when a response has been handled,
+	// to ensure resource are cleaned up.
+	addPendingRequest func(reqID ID) (respCh chan Response, cancelFn func())
+
 	// Mutex for synchronizing writes to the connection.
 	writeMu sync.Mutex
-
-	// ID counter for outgoing requests.
-	idCounter int64
-
-	// Map of pending requests.
-	pending   map[string]chan *Response
-	pendingMu sync.Mutex
 
 	// Encoder for writing JSON messages.
 	enc *json.Encoder
 
-	// Decoder for reading JSON messages.
-	dec *json.Decoder
+	// Context for handling incoming messages.
+	handleCtx context.Context
+}
+
+// ConnConfig contains the options for creating a new JSON-RPC 2.0 connection.
+type ConnConfig struct {
+	// ReadWriter is used for reading and writing JSON-RPC 2.0 messages.
+	ReadWriter io.ReadWriter
+
+	// Handler processes incoming requests.
+	Handler Handler
+
+	// HandleContext is the context for handling incoming messages.
+	HandleContext context.Context
+
+	// NewRequestID returns a new request ID. It should be unique within the
+	// context of I/O between a single client and a server.
+	NewRequestID func() ID
+
+	// OnResponse is called when a response has been received.
+	OnResponse func(Response)
+
+	// AddPendingRequest is called when a connection has received an incoming
+	// request that's not a notification.
+	AddPendingRequest func(reqID ID) (respCh chan Response, cancelFn func())
 }
 
 // NewConn creates a new JSON-RPC 2.0 connection.
-func NewConn(rw io.ReadWriter, h Handler) *Conn {
+func NewConn(opts ConnConfig) *Conn {
 	return &Conn{
-		rw:      rw,
-		h:       h,
-		pending: make(map[string]chan *Response),
-		enc:     json.NewEncoder(rw),
-		dec:     json.NewDecoder(rw),
+		r:                 opts.ReadWriter,
+		h:                 opts.Handler,
+		newRequestID:      opts.NewRequestID,
+		onResponse:        opts.OnResponse,
+		addPendingRequest: opts.AddPendingRequest,
+		enc:               json.NewEncoder(opts.ReadWriter),
+		handleCtx:         opts.HandleContext,
 	}
 }
 
@@ -218,7 +269,7 @@ func (c *Conn) Listen(ctx context.Context) error {
 			return ctx.Err()
 		default:
 			var msg json.RawMessage
-			if err := json.NewDecoder(c.rw).Decode(&msg); err != nil {
+			if err := json.NewDecoder(c.r).Decode(&msg); err != nil {
 				if errors.Is(err, io.EOF) {
 					return err
 				}
@@ -233,32 +284,70 @@ func (c *Conn) Listen(ctx context.Context) error {
 			// safely do because the response to a request (if applicable) will
 			// contain the request ID, so responses can be sent back out of
 			// order.
-			go c.handleIncoming(ctx, msg)
+			go c.handleIncoming(c.handleCtx, msg)
 		}
 	}
+}
+
+func (c *Conn) WriteResponse(resp *Response) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.enc.Encode(resp)
+}
+
+// ParseRawJSONMessage parses raw JSON into a single or batch of JSON-RPC 2.0 messages.
+func ParseRawJSONMessage(rawMsg json.RawMessage) (messages []Message, batch bool, err error) {
+	// Try to parse as a batch (array of messages) first.
+	err = json.Unmarshal(rawMsg, &messages)
+	if err == nil && len(messages) == 0 {
+		// Empty batch.
+		return nil, false, nil
+	}
+	if err == nil && len(messages) > 0 {
+		return messages, true, nil
+	}
+
+	var msg Message
+	if err := json.Unmarshal(rawMsg, &msg); err != nil {
+		return nil, false, fmt.Errorf("jsonrpc: failed to decode message: %w", err)
+	}
+
+	// Not a batch. Treat as a single message.
+	return []Message{msg}, false, nil
 }
 
 // handleIncoming processes a JSON-RPC 2.0 message. It handles both single
 // messages and batch messages.
 func (c *Conn) handleIncoming(ctx context.Context, msg json.RawMessage) {
-	// Try to parse as a batch first
-	var batch []json.RawMessage
-	err := json.Unmarshal(msg, &batch)
-	if err == nil && len(batch) == 0 {
-		// Empty batch.
+	writeInvalidRequest := func() {
+		_ = c.WriteResponse(&Response{
+			JSONRPC: version,
+			Error:   &ErrInvalidRequest,
+		})
+	}
+
+	messages, batch, err := ParseRawJSONMessage(msg)
+	if err != nil {
+		writeInvalidRequest()
 		return
 	}
-	if err == nil && len(batch) > 0 {
-		// Process batch
-		responses := make([]*Response, 0, len(batch))
-		for _, item := range batch {
-			resp := c.processMessage(ctx, item)
+
+	if len(messages) == 0 {
+		writeInvalidRequest()
+		return
+	}
+
+	if batch {
+		// Process batch.
+		// TODO: Fan out to multiple goroutines.
+		responses := make([]*Response, 0, len(messages))
+		for _, message := range messages {
+			resp := c.ProcessMessage(ctx, message)
 			if resp != nil {
 				responses = append(responses, resp)
 			}
 		}
-
-		// Send batch response if there are any responses
+		// Send batch response if there are any responses.
 		if len(responses) > 0 {
 			c.writeMu.Lock()
 			defer c.writeMu.Unlock()
@@ -268,81 +357,65 @@ func (c *Conn) handleIncoming(ctx context.Context, msg json.RawMessage) {
 	}
 
 	// Not a batch, process as a single message.
-	resp := c.processMessage(ctx, msg)
+	resp := c.ProcessMessage(ctx, messages[0])
 	if resp != nil {
-		c.writeMu.Lock()
-		defer c.writeMu.Unlock()
-		_ = c.enc.Encode(resp)
+		_ = c.WriteResponse(resp)
 	}
 }
 
-// processMessage handles a single JSON-RPC 2.0 message item, which could be
+// ProcessMessage handles a single JSON-RPC 2.0 message item, which could be
 // either a request or a response. Returns a response if one should be sent back.
-func (c *Conn) processMessage(ctx context.Context, rawMsg json.RawMessage) *Response {
-	// Try to parse the msg
-	var msg struct {
-		JSONRPC string          `json:"jsonrpc"`
-		ID      ID              `json:"id,omitempty"`
-		Method  string          `json:"method,omitempty"`
-		Result  json.RawMessage `json:"result,omitempty"`
-		Error   *Error          `json:"error,omitempty"`
-	}
-
-	if err := json.Unmarshal(rawMsg, &msg); err != nil || msg.JSONRPC != version {
-		// Invalid message
-		if len(msg.ID) > 0 {
-			return &Response{
-				JSONRPC: version,
-				Error:   &ErrInvalidRequest,
-				ID:      msg.ID,
-			}
-		}
-		return nil
-	}
-
-	// Check if it's a response (has ID and either Result or Error, but no Method)
-	if len(msg.ID) > 0 && msg.Method == "" && (len(msg.Result) > 0 || msg.Error != nil) {
-		var resp Response
-		if err := json.Unmarshal(rawMsg, &resp); err == nil {
-			c.handleResponse(&resp)
-		}
-		return nil
-	}
-
-	// It's a request or notification
-	var req Request
-	if err := json.Unmarshal(rawMsg, &req); err != nil {
-		if len(msg.ID) > 0 {
-			return &Response{
-				JSONRPC: version,
-				Error:   &ErrInvalidRequest,
-				ID:      msg.ID,
-			}
-		}
-		return nil
-	}
-
-	// Process valid request
-	resp, err := c.processRequest(ctx, &req)
-	if err != nil && len(req.ID) > 0 {
+func (c *Conn) ProcessMessage(ctx context.Context, msg Message) *Response {
+	if msg.JSONRPC != version {
 		return &Response{
 			JSONRPC: version,
-			Error:   &ErrInternal,
-			ID:      req.ID,
+			ID:      msg.ID,
+			Error:   &ErrInvalidRequest,
 		}
 	}
-	return resp
-}
 
-// handleResponse processes a JSON-RPC 2.0 response.
-func (c *Conn) handleResponse(resp *Response) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-
-	if ch, ok := c.pending[resp.ID.String()]; ok {
-		ch <- resp
-		delete(c.pending, resp.ID.String())
+	if msg.IsResponse() {
+		resp := Response{
+			JSONRPC: version,
+			ID:      msg.ID,
+			Result:  msg.Result,
+			Error:   msg.Error,
+		}
+		c.onResponse(resp)
+		return nil
 	}
+
+	if !msg.IsRequest() {
+		return &Response{
+			JSONRPC: version,
+			ID:      msg.ID,
+			Error:   &ErrInvalidRequest,
+		}
+	}
+
+	req := Request{
+		JSONRPC: version,
+		ID:      msg.ID,
+		Method:  msg.Method,
+		Params:  msg.Params,
+	}
+
+	resp, err := c.processRequest(ctx, &req)
+	if err != nil {
+		// TODO: Log error.
+		if len(req.ID) > 0 {
+			return &Response{
+				JSONRPC: version,
+				ID:      req.ID,
+				Error:   &ErrInternal,
+			}
+		}
+		// Notifications (requests without ID) are not expected to return a
+		// response.
+		return nil
+	}
+
+	return resp
 }
 
 // processRequest handles a JSON-RPC 2.0 request and returns a response and an error.
@@ -415,10 +488,6 @@ func (c *Conn) processRequest(ctx context.Context, req *Request) (*Response, err
 
 // Call makes a JSON-RPC 2.0 method call and waits for the response.
 func (c *Conn) Call(ctx context.Context, method string, params any) (json.RawMessage, error) {
-	// Create a new request with a unique ID
-	id := atomic.AddInt64(&c.idCounter, 1)
-	rawID := json.RawMessage(fmt.Sprintf("%d", id))
-
 	var paramsJSON json.RawMessage
 	if params != nil {
 		var err error
@@ -432,23 +501,13 @@ func (c *Conn) Call(ctx context.Context, method string, params any) (json.RawMes
 		JSONRPC: version,
 		Method:  method,
 		Params:  paramsJSON,
-		ID:      ID(rawID),
+		ID:      c.newRequestID(),
 	}
 
-	// Create a channel to receive the response
-	respChan := make(chan *Response, 1)
-	c.pendingMu.Lock()
-	c.pending[req.ID.String()] = respChan
-	c.pendingMu.Unlock()
+	respChan, cancel := c.addPendingRequest(req.ID)
+	defer cancel()
 
-	// Ensure cleanup of pending request in all cases.
-	defer func() {
-		c.pendingMu.Lock()
-		delete(c.pending, req.ID.String())
-		c.pendingMu.Unlock()
-	}()
-
-	// Send the request
+	// Send the request.
 	c.writeMu.Lock()
 	err := c.enc.Encode(req)
 	c.writeMu.Unlock()
@@ -534,81 +593,49 @@ func (c *Conn) CallBatch(ctx context.Context, requests []BatchRequest) ([]BatchR
 
 	// Create batch of requests with unique IDs
 	batch := make([]Request, len(requests))
-	respChans := make(map[string]chan *Response, len(requests))
-	rawIDs := make([]json.RawMessage, len(requests))
-
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
+	respChans := make(map[string]chan Response, len(requests))
 
 	for i, req := range requests {
-		// Create a unique ID for each request
-		id := atomic.AddInt64(&c.idCounter, 1)
-		rawID := json.RawMessage(fmt.Sprintf("%d", id))
-		rawIDs[i] = rawID
+		id := c.newRequestID()
+		respCh, cancel := c.addPendingRequest(id)
+		defer cancel()
 
 		var paramsJSON json.RawMessage
 		if req.Params != nil {
 			var err error
 			paramsJSON, err = json.Marshal(req.Params)
 			if err != nil {
-				// Clean up any channels we've already created
-				for j := 0; j < i; j++ {
-					delete(c.pending, string(rawIDs[j]))
-				}
 				return nil, fmt.Errorf("failed to marshal params for request %d: %w", i, err)
 			}
 		}
 
-		idVal := ID(rawID)
 		batch[i] = Request{
 			JSONRPC: version,
 			Method:  req.Method,
 			Params:  paramsJSON,
-			ID:      idVal,
+			ID:      id,
 		}
 
-		// Create a channel to receive the response
-		respChan := make(chan *Response, 1)
-		respChans[string(rawID)] = respChan
-		c.pending[string(rawID)] = respChan
+		respChans[id.String()] = respCh
 	}
 
 	// Send the batch request
 	c.writeMu.Lock()
 	err := c.enc.Encode(batch)
 	c.writeMu.Unlock()
-
 	if err != nil {
-		// Clean up all pending requests
-		for i := 0; i < len(requests); i++ {
-			delete(c.pending, string(rawIDs[i]))
-		}
 		return nil, fmt.Errorf("failed to send batch request: %w", err)
 	}
 
-	// Wait for all responses or context cancellation
-	responses := make([]BatchResponse, len(requests))
-	responsesReceived := 0
-
-	for i, rawID := range rawIDs {
+	responses := make([]BatchResponse, 0, len(respChans))
+	// Wait for all responses or context cancellation.
+	for _, respChan := range respChans {
 		select {
 		case <-ctx.Done():
-			// Clean up remaining pending requests
-			for j := i; j < len(requests); j++ {
-				delete(c.pending, string(rawIDs[j]))
-			}
 			return nil, ctx.Err()
 
-		case resp := <-respChans[string(rawID)]:
-			delete(c.pending, string(rawID))
-
-			if resp.Error != nil {
-				responses[i] = BatchResponse{Error: resp.Error}
-			} else {
-				responses[i] = BatchResponse{Result: resp.Result}
-			}
-
-			responsesReceived++
+		case resp := <-respChan:
+			responses = append(responses, BatchResponse{Result: resp.Result, Error: resp.Error})
 		}
 	}
 

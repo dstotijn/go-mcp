@@ -106,10 +106,17 @@ func (c *Client) Connect(ctx context.Context) error {
 		return err
 	}
 
-	conn := jsonrpc.NewConn(c.rwc, c)
-	c.session = &Session{
-		conn: conn,
-	}
+	handleCtx := context.WithValue(ctx, sessionKey, c.session)
+	session := newSession("", nil)
+	conn := jsonrpc.NewConn(jsonrpc.ConnConfig{
+		ReadWriter:        c.rwc,
+		Handler:           c,
+		HandleContext:     handleCtx,
+		NewRequestID:      session.newRequestID,
+		OnResponse:        session.handleResponse,
+		AddPendingRequest: session.addPendingRequest,
+	})
+	c.session = session
 
 	go conn.Listen(ctx)
 

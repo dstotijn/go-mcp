@@ -24,6 +24,8 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"slices"
+	"strings"
 	"sync"
 
 	"github.com/dstotijn/go-mcp/internal/jsonrpc"
@@ -32,7 +34,7 @@ import (
 )
 
 // ProtocolVersion defines the protocol version this implementation supports.
-const ProtocolVersion = "2024-11-05"
+const ProtocolVersion = "2025-03-26"
 
 var jsonschemaReflector = jsonschema.Reflector{
 	Anonymous:      true,
@@ -44,9 +46,9 @@ type ctxKey int
 const sessionKey ctxKey = 0
 
 type Server struct {
-	name        string
-	version     string
-	sseEndpoint *url.URL
+	name     string
+	version  string
+	endpoint *url.URL
 
 	sessions   map[string]*Session
 	sessionsMu sync.RWMutex
@@ -60,9 +62,9 @@ type Server struct {
 	listPromptsFn           func(ctx context.Context, params ListPromptsParams) (*ListPromptsResult, error)
 	getPromptFn             func(ctx context.Context, params GetPromptParams) (*GetPromptResult, error)
 	completeFn              func(ctx context.Context, params CompleteParams) (*CompleteResult, error)
-	onClientInitializedFn   func(ctx context.Context, session Session)
-	onRootsListChangedFn    func(ctx context.Context, session Session)
-	onSubscribeResourceFn   func(ctx context.Context, session Session, params ResourceSubscribeParams) error
+	onClientInitializedFn   func(ctx context.Context, session *Session)
+	onRootsListChangedFn    func(ctx context.Context, session *Session)
+	onSubscribeResourceFn   func(ctx context.Context, session *Session, params ResourceSubscribeParams) error
 }
 
 type ServerOption func(*Server)
@@ -78,9 +80,9 @@ type ServerConfig struct {
 	ListPromptsFn           func(ctx context.Context, params ListPromptsParams) (*ListPromptsResult, error)
 	GetPromptFn             func(ctx context.Context, params GetPromptParams) (*GetPromptResult, error)
 	CompleteFn              func(ctx context.Context, params CompleteParams) (*CompleteResult, error)
-	OnClientInitializedFn   func(ctx context.Context, conn Session)
-	OnRootsListChangedFn    func(ctx context.Context, conn Session)
-	OnSubscribeResourceFn   func(ctx context.Context, session Session, params ResourceSubscribeParams) error
+	OnClientInitializedFn   func(ctx context.Context, session *Session)
+	OnRootsListChangedFn    func(ctx context.Context, session *Session)
+	OnSubscribeResourceFn   func(ctx context.Context, session *Session, params ResourceSubscribeParams) error
 }
 
 func NewServer(cfg ServerConfig, opts ...ServerOption) *Server {
@@ -110,22 +112,31 @@ func NewServer(cfg ServerConfig, opts ...ServerOption) *Server {
 // WithStdioTransport returns a ServerOption that configures the server to use stdin/stdout for transport.
 func WithStdioTransport() ServerOption {
 	return func(s *Server) {
-		session := &Session{
-			sessionID: StdioSessionID,
-		}
-		conn := jsonrpc.NewConn(stdioRW, s)
+		session := newSession(StdioSessionID, nil)
+		handleCtx := context.WithValue(context.Background(), sessionKey, session)
+		conn := jsonrpc.NewConn(jsonrpc.ConnConfig{
+			ReadWriter:        stdioRW,
+			Handler:           s,
+			HandleContext:     handleCtx,
+			NewRequestID:      session.newRequestID,
+			OnResponse:        session.handleResponse,
+			AddPendingRequest: session.addPendingRequest,
+		})
 		session.conn = conn
 
 		s.sessionsMu.Lock()
-		s.sessions[session.sessionID] = session
+		s.sessions[session.id] = session
 		s.sessionsMu.Unlock()
 	}
 }
 
-// WithSSETransport returns a ServerOption that configures the server to use Server-Sent Events (SSE) for transport.
-func WithSSETransport(endpoint url.URL) ServerOption {
+// WithStreamableHTTPTransport returns a ServerOption that configures the server
+// to use the Streamable HTTP transport.
+//
+// See: https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http
+func WithStreamableHTTPTransport(endpoint url.URL) ServerOption {
 	return func(s *Server) {
-		s.sseEndpoint = &endpoint
+		s.endpoint = &endpoint
 	}
 }
 
@@ -135,8 +146,7 @@ func (s *Server) Start(ctx context.Context) {
 	defer s.sessionsMu.RUnlock()
 
 	for _, session := range s.sessions {
-		handleCtx := context.WithValue(ctx, sessionKey, session)
-		go session.conn.Listen(handleCtx)
+		go session.conn.Listen(ctx)
 	}
 }
 
@@ -180,25 +190,39 @@ func (s *Server) NotifyToolsListChanged(ctx context.Context) {
 		if !session.initialized {
 			continue
 		}
-		go func() {
-			if err := session.conn.Notify(ctx, "notifications/tools/list_changed", nil); err != nil {
-				log.Printf("Failed to notify client: %v", err)
-			}
-		}()
+		if session.conn != nil {
+			go func() {
+				if err := session.conn.Notify(ctx, "notifications/tools/list_changed", nil); err != nil {
+					log.Printf("Failed to notify client: %v", err)
+				}
+			}()
+		}
 	}
 }
 
 // ServeHTTP implements [http.Handler].
 func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	switch req.Method {
-	case "GET":
-		s.HandleSSE(w, req)
+	if s.endpoint == nil {
+		http.NotFound(w, req)
 		return
+	}
+
+	switch req.Method {
 	case "POST":
-		s.HandleJSONRPC(w, req)
+		if req.URL.Query().Has("sessionId") {
+			s.handleJSONRPCRequest(w, req)
+		} else {
+			s.handleStreamableHTTP(w, req)
+		}
+		return
+	case "GET":
+		s.handleSSE(w, req)
+		return
+	case "DELETE":
+		// TODO...
 		return
 	case "OPTIONS":
-		w.Header().Set("Allow", "GET, POST, OPTIONS")
+		w.Header().Set("Allow", "GET, POST, DELETE, OPTIONS")
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -206,68 +230,154 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }
 
-// HandleSSE handles an incoming HTTP request to initiate a Server-Sent Events (SSE) connection.
-func (s *Server) HandleSSE(w http.ResponseWriter, req *http.Request) {
-	if s.sseEndpoint == nil {
-		http.NotFound(w, req)
+func (s *Server) handleSSE(w http.ResponseWriter, req *http.Request) {
+	var session *Session
+	sessionID := req.Header.Get("Mcp-Session-Id")
+
+	if sessionID == "" {
+		session = newSession("", nil)
+		s.sessionsMu.Lock()
+		s.sessions[session.id] = session
+		s.sessionsMu.Unlock()
+	} else {
+		s.sessionsMu.RLock()
+		var ok bool
+		session, ok = s.sessions[sessionID]
+		s.sessionsMu.RUnlock()
+		if !ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			rpcErr := jsonrpc.ErrInvalidRequest.WithData(map[string]any{
+				"detail": "Session not found",
+			})
+			_ = json.NewEncoder(w).Encode(rpcErr)
+			return
+		}
+	}
+
+	stream := session.addStream()
+
+	// We're *not* deriving from the request context here, because the request
+	// might timeout or be canceled, and we want to keep handling any in-flight
+	// messages.
+	handleCtx := context.WithValue(context.Background(), sessionKey, session)
+	conn := jsonrpc.NewConn(jsonrpc.ConnConfig{
+		ReadWriter:        stream.newClientLocalConn(),
+		Handler:           s,
+		HandleContext:     handleCtx,
+		NewRequestID:      session.newRequestID,
+		OnResponse:        session.handleResponse,
+		AddPendingRequest: session.addPendingRequest,
+	})
+	session.conn = conn
+
+	go conn.Listen(req.Context())
+
+	rc := http.NewResponseController(w)
+	writeSSEHeaders(w)
+
+	// If the session ID was not provied in the `Mcp-Session-Id` header,
+	// we're handling a legacy "SSE transport" request.
+	if sessionID == "" {
+		session.sseWriter = stream.serverConn
+		// As opposed to the "Streamable HTTP" transport, we should close
+		// the stream after the request is handled (e.g. when the connection
+		// is closed).
+		defer stream.close()
+
+		// Announce the endpoint URL that MCP clients should use for subsequent
+		// JSON-RPC requests.
+		sseEndpoint := *s.endpoint
+		q := sseEndpoint.Query()
+		q.Set("sessionId", session.id)
+		sseEndpoint.RawQuery = q.Encode()
+
+		writeServerSentEvent(w, "endpoint", "", sseEndpoint.String())
+		rc.Flush()
+	}
+
+	stream.writeEvents(req.Context(), nil, w, rc)
+}
+
+func (s *Server) handleStreamableHTTP(w http.ResponseWriter, req *http.Request) {
+	ctx := req.Context()
+
+	acceptTypes := make([]string, 0)
+	for acceptType := range strings.SplitSeq(req.Header.Get("Accept"), ",") {
+		acceptTypes = append(acceptTypes, strings.ToLower(strings.TrimSpace(acceptType)))
+	}
+
+	if !slices.Contains(acceptTypes, "application/json") || !slices.Contains(acceptTypes, "text/event-stream") {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		rpcErr := jsonrpc.ErrInvalidRequest.WithData(map[string]any{
+			"detail": "Invalid Accept header: must include 'application/json' and 'text/event-stream'.",
+		})
+		_ = json.NewEncoder(w).Encode(rpcErr)
 		return
 	}
 
-	rc := http.NewResponseController(w)
+	var session *Session
+	sessionID := req.Header.Get("Mcp-Session-Id")
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	sessionID := generateSessionID()
-	client, server := localPipe()
-	defer server.Close()
-
-	session := &Session{
-		sessionID: sessionID,
-		sseWriter: server,
-	}
-	conn := jsonrpc.NewConn(client, s)
-	handleCtx := context.WithValue(req.Context(), sessionKey, session)
-	go conn.Listen(handleCtx)
-	session.conn = conn
-
-	s.sessionsMu.Lock()
-	s.sessions[sessionID] = session
-	s.sessionsMu.Unlock()
-
-	// Announce the endpoint URL that MCP clients should use for subsequent
-	// JSON-RPC requests.
-	sseEndpoint := *s.sseEndpoint
-	q := sseEndpoint.Query()
-	q.Set("sessionId", sessionID)
-	sseEndpoint.RawQuery = q.Encode()
-
-	writeSSEEvent(w, "endpoint", sseEndpoint.String())
-	rc.Flush()
-
-	for {
-		select {
-		case <-req.Context().Done():
-			s.sessionsMu.Lock()
-			delete(s.sessions, sessionID)
-			s.sessionsMu.Unlock()
+	if sessionID == "" {
+		session = newSession("", nil)
+		s.sessionsMu.Lock()
+		s.sessions[session.id] = session
+		s.sessionsMu.Unlock()
+	} else {
+		s.sessionsMu.RLock()
+		var ok bool
+		session, ok = s.sessions[sessionID]
+		s.sessionsMu.RUnlock()
+		if !ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			rpcErr := jsonrpc.ErrInvalidRequest.WithData(map[string]any{
+				"detail": "Session not found",
+			})
+			_ = json.NewEncoder(w).Encode(rpcErr)
 			return
-		case msg, ok := <-server.recv:
-			if !ok {
-				return
-			}
-			writeSSEEvent(w, "message", string(msg))
-			rc.Flush()
 		}
 	}
+
+	stream := session.addStream()
+
+	// We're *not* deriving from the request context here, because the request
+	// might timeout or be canceled, and we want to keep handling any in-flight
+	// messages.
+	handleCtx := context.WithValue(context.Background(), sessionKey, session)
+	conn := jsonrpc.NewConn(jsonrpc.ConnConfig{
+		ReadWriter:        stream.newClientLocalConn(),
+		Handler:           s,
+		HandleContext:     handleCtx,
+		NewRequestID:      session.newRequestID,
+		OnResponse:        session.handleResponse,
+		AddPendingRequest: session.addPendingRequest,
+	})
+	go conn.Listen(ctx)
+
+	err := stream.handleHTTPRequest(ctx, w, req)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		rpcErr := jsonrpc.ErrInvalidRequest.WithData(map[string]any{
+			"detail": err.Error(),
+		})
+		_ = json.NewEncoder(w).Encode(rpcErr)
+		return
+	}
 }
 
-func writeSSEEvent(w io.Writer, event string, data any) {
-	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+func writeServerSentEvent(w io.Writer, event, id string, data any) {
+	fmt.Fprintf(w, "event: %s\n", event)
+	if id != "" {
+		fmt.Fprintf(w, "id: %s\n", id)
+	}
+	fmt.Fprintf(w, "data: %s\n\n", data)
 }
 
-func (s *Server) HandleJSONRPC(w http.ResponseWriter, req *http.Request) {
+func (s *Server) handleJSONRPCRequest(w http.ResponseWriter, req *http.Request) {
 	sessionID := req.URL.Query().Get("sessionId")
 	if sessionID == "" {
 		http.Error(w, "Missing session ID", http.StatusBadRequest)
@@ -453,7 +563,7 @@ func (s *Server) handleInitializedNotification(ctx context.Context) error {
 	session.initialized = true
 
 	if s.onClientInitializedFn != nil {
-		s.onClientInitializedFn(ctx, *session)
+		s.onClientInitializedFn(ctx, session)
 	}
 
 	return nil
@@ -467,7 +577,7 @@ func (s *Server) handleRootsListChangedNotification(ctx context.Context) error {
 	}
 
 	if s.onRootsListChangedFn != nil {
-		s.onRootsListChangedFn(ctx, *session)
+		s.onRootsListChangedFn(ctx, session)
 	}
 
 	return nil
@@ -508,7 +618,7 @@ func (s *Server) handleSubscribeResourceRequest(ctx context.Context, params Reso
 		})
 	}
 
-	err := s.onSubscribeResourceFn(ctx, *session, params)
+	err := s.onSubscribeResourceFn(ctx, session, params)
 	if err != nil {
 		return nil, fmt.Errorf("subscribe resource failed: %w", err)
 	}
