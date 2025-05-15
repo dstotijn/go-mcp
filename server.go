@@ -219,7 +219,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		s.handleSSE(w, req)
 		return
 	case "DELETE":
-		// TODO...
+		s.handleDeleteSession(w, req)
 		return
 	case "OPTIONS":
 		w.Header().Set("Allow", "GET, POST, DELETE, OPTIONS")
@@ -367,6 +367,31 @@ func (s *Server) handleStreamableHTTP(w http.ResponseWriter, req *http.Request) 
 		_ = json.NewEncoder(w).Encode(rpcErr)
 		return
 	}
+}
+
+func (s *Server) handleDeleteSession(w http.ResponseWriter, req *http.Request) {
+	sessionID := req.Header.Get("Mcp-Session-Id")
+	if sessionID == "" {
+		http.Error(w, "Missing session ID", http.StatusBadRequest)
+		return
+	}
+
+	s.sessionsMu.Lock()
+	defer s.sessionsMu.Unlock()
+
+	session, ok := s.sessions[sessionID]
+	if !ok {
+		http.Error(w, "Session not found", http.StatusNotFound)
+		return
+	}
+
+	for _, stream := range session.streams {
+		stream.close()
+	}
+
+	delete(s.sessions, sessionID)
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func writeServerSentEvent(w io.Writer, event, id string, data any) {
